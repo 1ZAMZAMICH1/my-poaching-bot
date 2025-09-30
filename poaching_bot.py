@@ -1,10 +1,10 @@
-# poaching_bot.py
+# poaching_bot.py (Gunicorn Version)
 
 import logging
 import os
-from threading import Thread
-from flask import Flask
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+import telegram
+from flask import Flask, request
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -14,22 +14,18 @@ from telegram.ext import (
     filters,
 )
 
-# --- ВСТАВЬТЕ ВАШИ ДАННЫЕ СЮДА ---
+# --- ВАШИ ДАННЫЕ ---
+# Убедитесь, что здесь стоит ваш НОВЫЙ токен, если вы его меняли
 TELEGRAM_TOKEN = "8220423102:AAFkY60ZGV9FF_7kBtp-1_TTIf21t-RrIwA" 
-ADMIN_CHAT_ID = "692649974" 
-
-# Придумайте уникальное имя для вашего приложения на английском
-# Оно понадобится для ссылки. Например: fishing-report-bot-kz
-APP_NAME = "fishing-report-bot-kz" 
+ADMIN_CHAT_ID = "692649974" # Не забудьте вставить ваш ID
 # --- КОНЕЦ НАСТРОЕК ---
-
-WEBHOOK_URL = f"https://{APP_NAME}.onrender.com"
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 LOCATION, DESCRIPTION, PHOTO, CONFIRMATION = range(4)
 
+# --- Функции диалога (без изменений) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "Здравствуйте! Я помогу вам анонимно сообщить о факте браконьерства.\n\n"
@@ -41,19 +37,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['location'] = update.message.text
-    await update.message.reply_text(
-        "Отлично, местоположение записано.\n\n"
-        "Теперь, пожалуйста, опишите ситуацию. Что именно вы видели?"
-    )
+    await update.message.reply_text("Отлично, местоположение записано.\n\nТеперь, пожалуйста, опишите ситуацию. Что именно вы видели?")
     return DESCRIPTION
 
 async def description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['description'] = update.message.text
     reply_keyboard = [["Пропустить"]]
     await update.message.reply_text(
-        "Спасибо, описание принято.\n\n"
-        "Если у вас есть фото или видео, отправьте его сейчас. Если нет - нажмите 'Пропустить'.",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
+        "Спасибо, описание принято.\n\nЕсли у вас есть фото или видео, отправьте его сейчас. Если нет - нажмите 'Пропустить'.",
+        reply_markup=telegram.ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
     return PHOTO
 
@@ -80,7 +72,7 @@ async def show_summary_and_ask_for_confirmation(update: Update, context: Context
     reply_keyboard = [["Да, отправить"], ["Нет, отменить"]]
     await update.message.reply_text(
         summary_text,
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
+        reply_markup=telegram.ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
         parse_mode='Markdown'
     )
 
@@ -99,7 +91,7 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     await update.message.reply_text(
         "Спасибо! Ваше сообщение отправлено. Вы вносите огромный вклад в сохранение природы.",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=telegram.ReplyKeyboardRemove(),
     )
     user_data.clear()
     return ConversationHandler.END
@@ -108,40 +100,43 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
         "Операция отменена. Если захотите сообщить снова, просто нажмите /start.",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=telegram.ReplyKeyboardRemove(),
     )
     return ConversationHandler.END
 
+# --- Инициализация бота и веб-сервера ---
+ptb = Application.builder().token(TELEGRAM_TOKEN).build()
+
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, location)],
+        DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description)],
+        PHOTO: [MessageHandler(filters.PHOTO, photo), MessageHandler(filters.Regex("^Пропустить$"), skip_photo)],
+        CONFIRMATION: [MessageHandler(filters.Regex("^Да, отправить$"), send_report), MessageHandler(filters.Regex("^Нет, отменить$"), cancel)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+ptb.add_handler(conv_handler)
+
 app = Flask(__name__)
+
 @app.route('/')
 def index():
     return "Бот работает!"
 
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+@app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), ptb.bot)
+    await ptb.process_update(update)
+    return 'ok'
 
-def main() -> None:
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, location)],
-            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description)],
-            PHOTO: [MessageHandler(filters.PHOTO, photo), MessageHandler(filters.Regex("^Пропустить$"), skip_photo)],
-            CONFIRMATION: [MessageHandler(filters.Regex("^Да, отправить$"), send_report), MessageHandler(filters.Regex("^Нет, отменить$"), cancel)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(conv_handler)
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get('PORT', 8080)),
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
-    )
-
-if __name__ == "__main__":
-    flask_thread = Thread(target=run_flask)
-    flask_thread.start()
-    main()
+# Эта часть нужна только для ручной установки вебхука, если понадобится
+@app.route('/set_webhook')
+def set_webhook():
+    url = f'https://{request.headers["X-Forwarded-Host"]}/{TELEGRAM_TOKEN}'
+    s = ptb.bot.set_webhook(url)
+    if s:
+        return "webhook setup ok"
+    else:
+        return "webhook setup failed"
