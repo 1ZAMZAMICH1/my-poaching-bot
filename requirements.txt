@@ -1,4 +1,4 @@
 # requirements.txt
 python-telegram-bot
-flask
+flask[async]
 gunicorn
