@@ -1,7 +1,8 @@
-# poaching_bot.py (Gunicorn Version)
+# poaching_bot.py (Final Version)
 
 import logging
 import os
+import asyncio
 import telegram
 from flask import Flask, request
 from telegram import Update
@@ -15,9 +16,10 @@ from telegram.ext import (
 )
 
 # --- ВАШИ ДАННЫЕ ---
-# Убедитесь, что здесь стоит ваш НОВЫЙ токен, если вы его меняли
+# Убедитесь, что здесь стоит ваш АКТУАЛЬНЫЙ токен
 TELEGRAM_TOKEN = "8220423102:AAFkY60ZGV9FF_7kBtp-1_TTIf21t-RrIwA" 
-ADMIN_CHAT_ID = "692649974" # Не забудьте вставить ваш ID
+# ВАЖНО: Не забудьте вставить ваш реальный Chat ID
+ADMIN_CHAT_ID = "692649974" 
 # --- КОНЕЦ НАСТРОЕК ---
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -125,18 +127,14 @@ app = Flask(__name__)
 def index():
     return "Бот работает!"
 
+# ИЗМЕНЕНИЕ: Эта функция теперь СИНХРОННАЯ
 @app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), ptb.bot)
-    await ptb.process_update(update)
+def webhook():
+    # Получаем данные от Telegram
+    update_data = request.get_json(force=True)
+    update = Update.de_json(update_data, ptb.bot)
+    
+    # ИСПОЛЬЗУЕМ ASYNCIO для запуска асинхронной обработки в синхронной функции
+    asyncio.run(ptb.process_update(update))
+    
     return 'ok'
-
-# Эта часть нужна только для ручной установки вебхука, если понадобится
-@app.route('/set_webhook')
-def set_webhook():
-    url = f'https://{request.headers["X-Forwarded-Host"]}/{TELEGRAM_TOKEN}'
-    s = ptb.bot.set_webhook(url)
-    if s:
-        return "webhook setup ok"
-    else:
-        return "webhook setup failed"
