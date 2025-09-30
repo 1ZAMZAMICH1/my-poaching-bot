@@ -1,11 +1,9 @@
-# poaching_bot.py (The Correct Threaded Architecture)
+# poaching_bot.py (The Final Uvicorn Architecture)
 
 import logging
 import os
 import asyncio
-import threading
 import telegram
-from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -17,9 +15,7 @@ from telegram.ext import (
 )
 
 # --- ВАШИ ДАННЫЕ ---
-# Убедитесь, что здесь стоит ваш АКТУАЛЬНЫЙ токен
 TELEGRAM_TOKEN = "8220423102:AAFkY60ZGV9FF_7kBtp-1_TTIf21t-RrIwA" 
-# ВАЖНО: Не забудьте вставить ваш реальный Chat ID
 ADMIN_CHAT_ID = "692649974" 
 WEBHOOK_URL = "https://fishing-report-bot-kz.onrender.com"
 # --- КОНЕЦ НАСТРОЕК ---
@@ -95,7 +91,7 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     await update.message.reply_text(
         "Спасибо! Ваше сообщение отправлено. Вы вносите огромный вклад в сохранение природы.",
-        reply_markup=telegram.ReplyKeyboardRemove(),
+        reply_markup=telegram.ReplyKeyboardMarkup(),
     )
     user_data.clear()
     return ConversationHandler.END
@@ -104,7 +100,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
         "Операция отменена. Если захотите сообщить снова, просто нажмите /start.",
-        reply_markup=telegram.ReplyKeyboardRemove(),
+        reply_markup=telegram.ReplyKeyboardMarkup(),
     )
     return ConversationHandler.END
 
@@ -126,34 +122,48 @@ conv_handler = ConversationHandler(
 )
 ptb.add_handler(conv_handler)
 
-# Создаем Flask-приложение ("почтальон")
-app = Flask(__name__)
+# Это простая ASGI-обертка, которую Uvicorn понимает
+async def asgi_app(scope, receive, send):
+    if scope['type'] == 'http':
+        # Обрабатываем только POST запросы от Telegram
+        if scope['method'] == 'POST' and scope['path'] == f'/{TELEGRAM_TOKEN}':
+            # Читаем тело запроса
+            body = b''
+            more_body = True
+            while more_body:
+                message = await receive()
+                body += message.get('body', b'')
+                more_body = message.get('more_body', False)
+            
+            # Декодируем JSON и обрабатываем обновление
+            update = Update.de_json(telegram.helpers.json.loads(body.decode()), ptb.bot)
+            await ptb.process_update(update)
+            
+            # Отправляем ответ "ok"
+            await send({'type': 'http.response.start', 'status': 200, 'headers': []})
+            await send({'type': 'http.response.body', 'body': b''})
+        else:
+            # На все остальные запросы отвечаем "Бот работает!"
+            await send({'type': 'http.response.start', 'status': 200, 'headers': [(b'content-type', b'text/plain')]})
+            await send({'type': 'http.response.body', 'body': b'Bot works!'})
 
-@app.route('/')
-def index():
-    return "Бот работает!"
-
-@app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
-def webhook():
-    update_data = request.get_json(force=True)
-    update = Update.de_json(update_data, ptb.bot)
-    # Безопасно передаем обновление в цикл событий бота
-    asyncio.run_coroutine_threadsafe(ptb.process_update(update), bot_loop)
-    return 'ok'
-
-# Функция, которая будет работать в фоновом потоке
-def run_bot():
-    global bot_loop
-    bot_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(bot_loop)
-
-    # Инициализируем бота и устанавливаем вебхук
-    bot_loop.run_until_complete(ptb.initialize())
-    bot_loop.run_until_complete(ptb.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"))
+# Главная асинхронная функция
+async def main():
+    # Инициализируем бота
+    await ptb.initialize()
+    # Устанавливаем вебхук
+    await ptb.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}")
     
-    # Запускаем цикл событий навсегда
-    bot_loop.run_forever()
+    # Запускаем Uvicorn сервер
+    port = int(os.environ.get('PORT', 10000))
+    config = uvicorn.Config(asgi_app, host="0.0.0.0", port=port)
+    server = uvicorn.Server(config)
+    
+    # Запускаем бота и сервер вместе
+    async with ptb:
+        await ptb.start()
+        await server.serve()
+        await ptb.stop()
 
-# Запускаем фоновый поток с ботом
-thread = threading.Thread(target=run_bot)
-thread.start()
+if __name__ == "__main__":
+    asyncio.run(main())
