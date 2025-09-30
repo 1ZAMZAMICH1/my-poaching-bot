@@ -1,10 +1,11 @@
-# poaching_bot.py (The Final, Final, Corrected Version)
+# poaching_bot.py (The Final FastAPI Architecture)
 
 import logging
 import os
 import asyncio
 import telegram
-import uvicorn  # <--- ВОТ ОНА, НЕДОСТАЮЩАЯ СТРОЧКА
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -123,39 +124,30 @@ conv_handler = ConversationHandler(
 )
 ptb.add_handler(conv_handler)
 
-# Это простая ASGI-обертка, которую Uvicorn понимает
-async def asgi_app(scope, receive, send):
-    if scope['type'] == 'http':
-        if scope['method'] == 'POST' and scope['path'] == f'/{TELEGRAM_TOKEN}':
-            body = b''
-            more_body = True
-            while more_body:
-                message = await receive()
-                body += message.get('body', b'')
-                more_body = message.get('more_body', False)
-            
-            update = Update.de_json(telegram.helpers.json.loads(body.decode()), ptb.bot)
-            await ptb.process_update(update)
-            
-            await send({'type': 'http.response.start', 'status': 200, 'headers': []})
-            await send({'type': 'http.response.body', 'body': b''})
-        else:
-            await send({'type': 'http.response.start', 'status': 200, 'headers': [(b'content-type', b'text/plain')]})
-            await send({'type': 'http.response.body', 'body': b'Bot works!'})
-
-# Главная асинхронная функция
-async def main():
+# Эта функция управляет жизненным циклом бота
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Запуск бота...")
     await ptb.initialize()
     await ptb.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}")
-    
-    port = int(os.environ.get('PORT', 10000))
-    config = uvicorn.Config(asgi_app, host="0.0.0.0", port=port)
-    server = uvicorn.Server(config)
-    
     async with ptb:
         await ptb.start()
-        await server.serve()
+        yield # Приложение работает здесь
         await ptb.stop()
+    logger.info("Бот остановлен.")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Создаем веб-приложение FastAPI
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/{token}")
+async def process_update(token: str, request: Request):
+    if token == TELEGRAM_TOKEN:
+        data = await request.json()
+        update = Update.de_json(data, ptb.bot)
+        await ptb.process_update(update)
+        return {"status": "ok"}
+    return {"status": "invalid token"}
+
+@app.get("/")
+def index():
+    return "Бот работает!"
