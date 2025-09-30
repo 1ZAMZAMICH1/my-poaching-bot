@@ -1,4 +1,4 @@
-# poaching_bot.py (Final Version)
+# poaching_bot.py (Final Corrected Version)
 
 import logging
 import os
@@ -121,20 +121,17 @@ conv_handler = ConversationHandler(
 )
 ptb.add_handler(conv_handler)
 
+# КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Запускаем инициализацию перед созданием Flask app
+asyncio.run(ptb.initialize())
+
 app = Flask(__name__)
 
 @app.route('/')
 def index():
     return "Бот работает!"
 
-# ИЗМЕНЕНИЕ: Эта функция теперь СИНХРОННАЯ
 @app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
-def webhook():
-    # Получаем данные от Telegram
-    update_data = request.get_json(force=True)
-    update = Update.de_json(update_data, ptb.bot)
-    
-    # ИСПОЛЬЗУЕМ ASYNCIO для запуска асинхронной обработки в синхронной функции
-    asyncio.run(ptb.process_update(update))
-    
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), ptb.bot)
+    await ptb.process_update(update)
     return 'ok'
