@@ -1,9 +1,10 @@
-# poaching_bot.py (Final, Final Version)
+# poaching_bot.py (The Architecturally Correct Version)
 
 import logging
 import os
 import asyncio
 import telegram
+import threading
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
@@ -20,6 +21,7 @@ from telegram.ext import (
 TELEGRAM_TOKEN = "8220423102:AAFkY60ZGV9FF_7kBtp-1_TTIf21t-RrIwA" 
 # ВАЖНО: Не забудьте вставить ваш реальный Chat ID
 ADMIN_CHAT_ID = "692649974" 
+WEBHOOK_URL = "https://fishing-report-bot-kz.onrender.com"
 # --- КОНЕЦ НАСТРОЕК ---
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -106,33 +108,52 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return ConversationHandler.END
 
-# --- Инициализация бота и веб-сервера ---
-ptb = Application.builder().token(TELEGRAM_TOKEN).build()
+# --- Основная логика ---
 
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("start", start)],
-    states={
-        LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, location)],
-        DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description)],
-        PHOTO: [MessageHandler(filters.PHOTO, photo), MessageHandler(filters.Regex("^Пропустить$"), skip_photo)],
-        CONFIRMATION: [MessageHandler(filters.Regex("^Да, отправить$"), send_report), MessageHandler(filters.Regex("^Нет, отменить$"), cancel)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-ptb.add_handler(conv_handler)
+async def main():
+    # Создаем приложение без своего сервера, мы будем "кормить" его вручную
+    ptb = Application.builder().token(TELEGRAM_TOKEN).updater(None).build()
 
-# Запускаем инициализацию перед созданием Flask app
-asyncio.run(ptb.initialize())
+    # Добавляем обработчики
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, location)],
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description)],
+            PHOTO: [MessageHandler(filters.PHOTO, photo), MessageHandler(filters.Regex("^Пропустить$"), skip_photo)],
+            CONFIRMATION: [MessageHandler(filters.Regex("^Да, отправить$"), send_report), MessageHandler(filters.Regex("^Нет, отменить$"), cancel)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    ptb.add_handler(conv_handler)
 
-app = Flask(__name__)
+    # Инициализируем бота
+    await ptb.initialize()
+    # Устанавливаем вебхук
+    await ptb.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}")
 
-@app.route('/')
-def index():
-    return "Бот работает!"
+    # Создаем очередь для обновлений
+    update_queue = ptb.update_queue
+    
+    # Запускаем обработку очереди в фоновом режиме
+    async with ptb:
+        await ptb.start()
+        
+        # Создаем и запускаем Flask приложение
+        app = Flask(__name__)
 
-# Эта функция теперь снова async, и Flask будет знать, что с ней делать
-@app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), ptb.bot)
-    await ptb.process_update(update)
-    return 'ok'
+        @app.route('/')
+        def index():
+            return "Бот работает!"
+
+        @app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
+        async def webhook():
+            update = Update.de_json(request.get_json(force=True), ptb.bot)
+            await update_queue.put(update)
+            return 'ok'
+        
+        # Возвращаем Flask app для Gunicorn
+        return app
+
+# Запускаем асинхронную функцию main и получаем из нее Flask app
+app = asyncio.run(main())
