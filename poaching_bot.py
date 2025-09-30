@@ -1,9 +1,10 @@
-# poaching_bot.py (The Final Uvicorn Architecture)
+# poaching_bot.py (The Final, Final, Corrected Version)
 
 import logging
 import os
 import asyncio
 import telegram
+import uvicorn  # <--- ВОТ ОНА, НЕДОСТАЮЩАЯ СТРОЧКА
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -91,7 +92,7 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     await update.message.reply_text(
         "Спасибо! Ваше сообщение отправлено. Вы вносите огромный вклад в сохранение природы.",
-        reply_markup=telegram.ReplyKeyboardMarkup(),
+        reply_markup=telegram.ReplyKeyboardRemove(),
     )
     user_data.clear()
     return ConversationHandler.END
@@ -100,7 +101,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
         "Операция отменена. Если захотите сообщить снова, просто нажмите /start.",
-        reply_markup=telegram.ReplyKeyboardMarkup(),
+        reply_markup=telegram.ReplyKeyboardRemove(),
     )
     return ConversationHandler.END
 
@@ -125,9 +126,7 @@ ptb.add_handler(conv_handler)
 # Это простая ASGI-обертка, которую Uvicorn понимает
 async def asgi_app(scope, receive, send):
     if scope['type'] == 'http':
-        # Обрабатываем только POST запросы от Telegram
         if scope['method'] == 'POST' and scope['path'] == f'/{TELEGRAM_TOKEN}':
-            # Читаем тело запроса
             body = b''
             more_body = True
             while more_body:
@@ -135,31 +134,24 @@ async def asgi_app(scope, receive, send):
                 body += message.get('body', b'')
                 more_body = message.get('more_body', False)
             
-            # Декодируем JSON и обрабатываем обновление
             update = Update.de_json(telegram.helpers.json.loads(body.decode()), ptb.bot)
             await ptb.process_update(update)
             
-            # Отправляем ответ "ok"
             await send({'type': 'http.response.start', 'status': 200, 'headers': []})
             await send({'type': 'http.response.body', 'body': b''})
         else:
-            # На все остальные запросы отвечаем "Бот работает!"
             await send({'type': 'http.response.start', 'status': 200, 'headers': [(b'content-type', b'text/plain')]})
             await send({'type': 'http.response.body', 'body': b'Bot works!'})
 
 # Главная асинхронная функция
 async def main():
-    # Инициализируем бота
     await ptb.initialize()
-    # Устанавливаем вебхук
     await ptb.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}")
     
-    # Запускаем Uvicorn сервер
     port = int(os.environ.get('PORT', 10000))
     config = uvicorn.Config(asgi_app, host="0.0.0.0", port=port)
     server = uvicorn.Server(config)
     
-    # Запускаем бота и сервер вместе
     async with ptb:
         await ptb.start()
         await server.serve()
