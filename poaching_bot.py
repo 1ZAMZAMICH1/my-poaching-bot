@@ -1,4 +1,4 @@
-# poaching_bot.py (Final Corrected Version)
+# poaching_bot.py (Final, Final Version)
 
 import logging
 import os
@@ -121,7 +121,7 @@ conv_handler = ConversationHandler(
 )
 ptb.add_handler(conv_handler)
 
-# КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Запускаем инициализацию перед созданием Flask app
+# Запускаем инициализацию перед созданием Flask app
 asyncio.run(ptb.initialize())
 
 app = Flask(__name__)
@@ -130,6 +130,7 @@ app = Flask(__name__)
 def index():
     return "Бот работает!"
 
+# Эта функция теперь снова async, и Flask будет знать, что с ней делать
 @app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
 async def webhook():
     update = Update.de_json(request.get_json(force=True), ptb.bot)
